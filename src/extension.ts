@@ -180,81 +180,153 @@ async function saveRecentColor(
 
 }
 
-async function applyColor(
 
+interface ExistingColorEdit {
+    range: vscode.Range;
+    replacement: string;
+}
+
+function getExistingColorEdit(
     target: MarkdownTarget,
-
     mode: PaletteMode,
-
     color: string
+): ExistingColorEdit | undefined {
+    const document = target.editor.document;
+    const source = document.getText();
 
-): Promise<void> {
+    const start = document.offsetAt(target.selection.start);
+    const end = document.offsetAt(target.selection.end);
 
-    if (!isValidColor(color)) {
+    const closeTag = '</span>';
+    let openStart: number;
+    let openEnd: number;
+    let closeStart: number;
 
-        vscode.window.showErrorMessage('El color seleccionado no es válido.');
+    // Acepta tanto el span completo como la selección exacta de su contenido.
+    const selectedOpeningTag = source.slice(start, end).match(/^<span\b[^>]*>/i);
+    if (selectedOpeningTag && source.slice(end - closeTag.length, end) === closeTag) {
+        openStart = start;
+        openEnd = start + selectedOpeningTag[0].length - 1;
+        closeStart = end - closeTag.length;
+    } else {
+        openStart = source.lastIndexOf('<span', start);
+        if (openStart < 0) {
+            return undefined;
+        }
 
-        return;
+        openEnd = source.indexOf('>', openStart);
+        if (openEnd < 0 || openEnd >= start) {
+            return undefined;
+        }
 
+        closeStart = source.indexOf(closeTag, end);
+        if (closeStart < 0 || openEnd + 1 !== start || closeStart !== end) {
+            return undefined;
+        }
     }
 
-    const escapedText = escapeHtml(target.selectedText);
+    const openingTag = source.slice(openStart, openEnd + 1);
+    const property = mode === 'text'
+        ? 'color'
+        : 'background-color';
 
-    const replacement = mode === 'text'
+    const styleAttribute = /\bstyle\s*=\s*(["'])([\s\S]*?)\1/i.exec(openingTag);
+    if (!styleAttribute || styleAttribute.index === undefined) {
+        return undefined;
+    }
 
-        ? `<span style="color: ${color.toUpperCase()};">${escapedText}</span>`
+    const style = styleAttribute[2];
+    const styleStart = openStart + styleAttribute.index +
+        styleAttribute[0].indexOf(style);
+    const propertyPattern = new RegExp(
+        '(^|;)\\s*' + property +
+        '\\s*:\\s*(#(?:[0-9a-f]{3}|[0-9a-f]{6}))(?=\\s*(?:;|$))',
+        'i'
+    );
+    const existingProperty = propertyPattern.exec(style);
 
-        : `<span style="background-color: ${color.toUpperCase()};">${escapedText}</span>`;
+    if (existingProperty && existingProperty.index !== undefined) {
+        const colorStart = styleStart + existingProperty.index +
+            existingProperty[0].indexOf(existingProperty[2]);
+
+        return {
+            range: new vscode.Range(
+                document.positionAt(colorStart),
+                document.positionAt(colorStart + existingProperty[2].length)
+            ),
+            replacement: color
+        };
+    }
+
+    const separator = style.trim().length
+        ? (style.trimEnd().endsWith(';') ? ' ' : '; ')
+        : '';
+
+    return {
+        range: new vscode.Range(
+            document.positionAt(styleStart + style.length),
+            document.positionAt(styleStart + style.length)
+        ),
+        replacement: `${separator}${property}: ${color}`
+    };
+}
+
+
+
+
+async function applyColor(
+    target: MarkdownTarget,
+    mode: PaletteMode,
+    color: string
+): Promise<void> {
+    if (!isValidColor(color)) {
+        vscode.window.showErrorMessage(
+            'El color seleccionado no es válido.'
+        );
+        return;
+    }
+
+    const normalizedColor = color.toUpperCase();
+    const existingColorEdit = getExistingColorEdit(
+        target,
+        mode,
+        normalizedColor
+    );
+    const replacementRange = existingColorEdit?.range ?? target.selection;
+    const replacement = existingColorEdit?.replacement ?? (mode === 'text'
+        ? `<span style="color: ${normalizedColor};">${escapeHtml(target.selectedText)}</span>`
+        : `<span style="background-color: ${normalizedColor};">${escapeHtml(target.selectedText)}</span>`);
 
     const success = await target.editor.edit(editBuilder => {
-
-        editBuilder.replace(target.selection, replacement);
-
+        editBuilder.replace(replacementRange, replacement);
     });
 
     if (!success) {
-
         vscode.window.showErrorMessage(
-
             'No se pudo aplicar el formato al texto seleccionado.'
-
         );
-
         return;
-
     }
 
     const metadataSaved = await saveRecentColor(
-
         target.notebook,
-
         mode === 'text' ? 'textColors' : 'backgroundColors',
-
-        color.toUpperCase()
-
+        normalizedColor
     );
 
     if (!metadataSaved) {
-
         vscode.window.showWarningMessage(
-
             'El color se aplicó, pero no se pudo guardar el historial.'
-
         );
-
         return;
-
     }
 
     vscode.window.setStatusBarMessage(
-
-        `Color aplicado: ${color.toUpperCase()}`,
-
+        `Color aplicado: ${normalizedColor}`,
         3000
-
     );
-
 }
+
 
 function getRecentColors(
 
