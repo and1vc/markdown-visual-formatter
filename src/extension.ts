@@ -58,6 +58,68 @@ function escapeHtml(text: string): string {
 
 }
 
+
+/**
+ * Elimina únicamente el formato gestionado por esta extensión:
+ * <mark> y las propiedades color/background-color de los elementos <span>.
+ * Conserva el contenido y los demás estilos/atributos cuando existan.
+ */
+function clearFormatterMarkup(input: string): string {
+    let output = input;
+
+    // Eliminar etiquetas de resaltado, incluidas las que estén escapadas.
+    output = output
+        .replace(/<\/?mark\b[^>]*>/gi, '')
+        .replace(/&lt;\/?mark(?:\s[^&]*?)?&gt;/gi, '');
+
+    // Repetir sobre spans simples permite limpiar primero los elementos interiores.
+    const spanPattern = /<span\b([^<>]*)>([^<>]*)<\/span>/i;
+    for (let i = 0; i < 100; i++) {
+        let changed = false;
+        output = output.replace(spanPattern, (whole, rawAttributes: string, content: string) => {
+            const styleMatch = /\bstyle\s*=\s*(["'])([\s\S]*?)\1/i.exec(rawAttributes);
+            if (!styleMatch) {
+                return whole;
+            }
+
+            const style = styleMatch[2];
+            const declarations = style
+                .split(';')
+                .map(item => item.trim())
+                .filter(Boolean);
+            const remaining = declarations.filter(declaration => {
+                const property = declaration.split(':', 1)[0].trim().toLowerCase();
+                return property !== 'color' && property !== 'background-color';
+            });
+
+            if (remaining.length === declarations.length) {
+                return whole;
+            }
+
+            changed = true;
+            let attributes = rawAttributes.replace(styleMatch[0], '');
+            if (remaining.length > 0) {
+                const quote = styleMatch[1];
+                const replacementStyle = `style=${quote}${remaining.join('; ')}${quote}`;
+                attributes = `${attributes} ${replacementStyle}`;
+            }
+
+            attributes = attributes.trim();
+            if (!attributes) {
+                return content;
+            }
+
+            return `<span ${attributes}>${content}</span>`;
+        });
+
+        if (!changed) {
+            break;
+        }
+    }
+
+    return output;
+}
+
 async function getMarkdownTarget(): Promise<MarkdownTarget | undefined> {
 
     const notebookEditor = vscode.window.activeNotebookEditor;
@@ -738,9 +800,27 @@ export function activate(context: vscode.ExtensionContext): void {
 
             }
 
-            const replacement =
+            
+const selected = target.selectedText.trim();
 
-                `<mark>${escapeHtml(target.selectedText)}</mark>`;
+const existingMark = selected.match(
+    /^<mark\b[^>]*>([\s\S]*)<\/mark>$/i
+);
+
+const escapedMark = selected.match(
+    /^&lt;mark(?:\s[^&]*?)?&gt;([\s\S]*)&lt;\/mark&gt;$/i
+);
+
+// Si se selecciona un resaltado completo, conservar su contenido
+// y evitar escapar las etiquetas existentes.
+const content = existingMark
+    ? existingMark[1]
+    : escapedMark
+        ? escapedMark[1]
+        : escapeHtml(target.selectedText);
+
+const replacement = `<mark>${content}</mark>`;
+;
 
             const success = await target.editor.edit(editBuilder => {
 
@@ -762,6 +842,40 @@ export function activate(context: vscode.ExtensionContext): void {
 
         }
 
+    );
+
+    const clearFormattingCommand = vscode.commands.registerCommand(
+        'markdown-visual-formatter.clearFormatting',
+        async () => {
+            const target = await getMarkdownTarget();
+            if (!target) {
+                return;
+            }
+
+            const replacement = clearFormatterMarkup(target.selectedText);
+            if (replacement === target.selectedText) {
+                vscode.window.setStatusBarMessage(
+                    'No se encontró formato compatible para borrar.',
+                    3000
+                );
+                return;
+            }
+
+            const success = await target.editor.edit(editBuilder => {
+                editBuilder.replace(target.selection, replacement);
+            });
+
+            if (success) {
+                vscode.window.setStatusBarMessage(
+                    'Formato de texto eliminado.',
+                    3000
+                );
+            } else {
+                vscode.window.showErrorMessage(
+                    'No se pudo eliminar el formato del texto seleccionado.'
+                );
+            }
+        }
     );
 
     const textColorCommand = vscode.commands.registerCommand(

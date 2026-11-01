@@ -28,6 +28,11 @@
         "command": "markdown-visual-formatter.setBackgroundColor",
         "title": "Color de fondo",
         "icon": "$(paintcan)"
+      },
+      {
+        "command": "markdown-visual-formatter.clearFormatting",
+        "title": "Borrar formato",
+        "icon": "$(clear-all)"
       }
     ],
     "menus": {
@@ -46,6 +51,11 @@
           "command": "markdown-visual-formatter.setBackgroundColor",
           "when": "notebookType == jupyter-notebook && notebookCellType == markup",
           "group": "inline@3"
+        },
+        {
+          "command": "markdown-visual-formatter.clearFormatting",
+          "when": "notebookType == jupyter-notebook && notebookCellType == markup",
+          "group": "inline@4"
         }
       ]
     }
