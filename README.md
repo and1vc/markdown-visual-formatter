@@ -34,4 +34,7 @@ To launch the Extension Development Host, press `F5` in Visual Studio Code.
 
 ## License
 
+HEAD
 No license specified yet.
+No license specified yet.
+883de96 (docs: update project documentation and packaging)

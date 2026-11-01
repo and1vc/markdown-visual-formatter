@@ -1,9 +1,12 @@
-
 {
   "name": "markdown-visual-formatter",
   "displayName": "Markdown Visual Formatter",
-  "description": "Visual formatting toolbar for Markdown cells in Jupyter notebooks, with rich text colors and highlighting.",
+  "description": "Visual formatting toolbar for Markdown cells in Jupyter notebooks, with text highlighting, text and background colors, and clear formatting.",
   "version": "0.0.1",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/and1vc/markdown-visual-formatter.git"
+  },
   "engines": {
     "vscode": "^1.144.0"
   },
@@ -75,16 +78,17 @@
     "test": "vscode-test"
   },
   "devDependencies": {
-    "@types/vscode": "^1.144.0",
     "@types/mocha": "^10.0.10",
     "@types/node": "24.x",
-    "typescript-eslint": "^8.61.1",
-    "eslint": "^10.5.0",
+    "@types/vscode": "^1.144.0",
+    "@vscode/test-cli": "^0.0.15",
+    "@vscode/test-electron": "^3.0.0",
+    "@vscode/vsce": "^4.1.0",
     "esbuild": "^0.28.1",
+    "eslint": "^10.5.0",
     "npm-run-all": "^4.1.5",
     "typescript": "^6.0.3",
-    "@vscode/test-cli": "^0.0.15",
-    "@vscode/test-electron": "^3.0.0"
+    "typescript-eslint": "^8.61.1"
   },
   "overrides": {
     "diff": "^8.0.4",
