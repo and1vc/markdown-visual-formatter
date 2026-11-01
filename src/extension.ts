@@ -1,0 +1,731 @@
+
+
+import * as vscode from 'vscode';
+
+const PRESET_COLORS = [
+
+    '#FFFFFF', '#000000', '#F0F0E8', '#4472C4', '#5B9BD5',
+
+    '#C0504D', '#9BBB59', '#8064A2', '#4BACC6', '#F79646',
+
+    '#FF0000', '#FF9900', '#FFFF00', '#00B050', '#00B0F0',
+
+    '#0070C0', '#7030A0', '#FF69B4', '#90EE90', '#ADD8E6',
+
+    '#A52A2A', '#40E0D0', '#DDEBF7', '#E2F0D9', '#FCE4D6'
+
+];
+
+type ColorType = 'textColors' | 'backgroundColors';
+
+type PaletteMode = 'text' | 'background';
+
+interface FormatterMetadata {
+
+    textColors?: string[];
+
+    backgroundColors?: string[];
+
+}
+
+interface MarkdownTarget {
+
+    notebook: vscode.NotebookDocument;
+
+    editor: vscode.TextEditor;
+
+    selection: vscode.Selection;
+
+    selectedText: string;
+
+}
+
+function isValidColor(color: string): boolean {
+
+    return /^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/.test(color);
+
+}
+
+function escapeHtml(text: string): string {
+
+    return text
+
+        .replace(/&/g, '&amp;')
+
+        .replace(/</g, '&lt;')
+
+        .replace(/>/g, '&gt;');
+
+}
+
+async function getMarkdownTarget(): Promise<MarkdownTarget | undefined> {
+
+    const notebookEditor = vscode.window.activeNotebookEditor;
+
+    const textEditor = vscode.window.activeTextEditor;
+
+    if (!notebookEditor || !textEditor) {
+
+        vscode.window.showWarningMessage(
+
+            'Abre un notebook y selecciona texto en una celda Markdown.'
+
+        );
+
+        return undefined;
+
+    }
+
+    const cell = notebookEditor.notebook.getCells().find(
+
+        item => item.document.uri.toString() ===
+
+            textEditor.document.uri.toString()
+
+    );
+
+    if (!cell || cell.kind !== vscode.NotebookCellKind.Markup) {
+
+        vscode.window.showWarningMessage(
+
+            'Este comando solo funciona en celdas Markdown.'
+
+        );
+
+        return undefined;
+
+    }
+
+    const selection = textEditor.selection;
+
+    if (selection.isEmpty) {
+
+        vscode.window.showWarningMessage(
+
+            'Selecciona primero el texto que quieres modificar.'
+
+        );
+
+        return undefined;
+
+    }
+
+    return {
+
+        notebook: notebookEditor.notebook,
+
+        editor: textEditor,
+
+        selection,
+
+        selectedText: textEditor.document.getText(selection)
+
+    };
+
+}
+
+async function saveRecentColor(
+
+    notebook: vscode.NotebookDocument,
+
+    type: ColorType,
+
+    color: string
+
+): Promise<boolean> {
+
+    const metadata = { ...notebook.metadata };
+
+    const formatterMetadata = {
+
+        ...(
+
+            metadata.markdownVisualFormatter as FormatterMetadata | undefined
+
+        )
+
+    };
+
+    const previousColors = Array.isArray(formatterMetadata[type])
+
+        ? formatterMetadata[type]!
+
+        : [];
+
+    formatterMetadata[type] = [
+
+        color,
+
+        ...previousColors.filter(item => item !== color)
+
+    ].slice(0, 12);
+
+    metadata.markdownVisualFormatter = formatterMetadata;
+
+    const edit = new vscode.WorkspaceEdit();
+
+    edit.set(
+
+        notebook.uri,
+
+        [
+
+            vscode.NotebookEdit.updateNotebookMetadata(metadata)
+
+        ]
+
+    );
+
+    return vscode.workspace.applyEdit(edit);
+
+}
+
+async function applyColor(
+
+    target: MarkdownTarget,
+
+    mode: PaletteMode,
+
+    color: string
+
+): Promise<void> {
+
+    if (!isValidColor(color)) {
+
+        vscode.window.showErrorMessage('El color seleccionado no es válido.');
+
+        return;
+
+    }
+
+    const escapedText = escapeHtml(target.selectedText);
+
+    const replacement = mode === 'text'
+
+        ? `<span style="color: ${color.toUpperCase()};">${escapedText}</span>`
+
+        : `<span style="background-color: ${color.toUpperCase()};">${escapedText}</span>`;
+
+    const success = await target.editor.edit(editBuilder => {
+
+        editBuilder.replace(target.selection, replacement);
+
+    });
+
+    if (!success) {
+
+        vscode.window.showErrorMessage(
+
+            'No se pudo aplicar el formato al texto seleccionado.'
+
+        );
+
+        return;
+
+    }
+
+    const metadataSaved = await saveRecentColor(
+
+        target.notebook,
+
+        mode === 'text' ? 'textColors' : 'backgroundColors',
+
+        color.toUpperCase()
+
+    );
+
+    if (!metadataSaved) {
+
+        vscode.window.showWarningMessage(
+
+            'El color se aplicó, pero no se pudo guardar el historial.'
+
+        );
+
+        return;
+
+    }
+
+    vscode.window.setStatusBarMessage(
+
+        `Color aplicado: ${color.toUpperCase()}`,
+
+        3000
+
+    );
+
+}
+
+function getRecentColors(
+
+    notebook: vscode.NotebookDocument,
+
+    mode: PaletteMode
+
+): string[] {
+
+    const metadata = notebook.metadata.markdownVisualFormatter as FormatterMetadata | undefined;
+
+    const type: ColorType = mode === 'text'
+
+        ? 'textColors'
+
+        : 'backgroundColors';
+
+    return (metadata?.[type] ?? []).filter(isValidColor);
+
+}
+
+function createPaletteHtml(
+
+    webview: vscode.Webview,
+
+    mode: PaletteMode,
+
+    recentColors: string[]
+
+): string {
+
+    const nonce = getNonce();
+
+    const title = mode === 'text'
+
+        ? 'Color de texto'
+
+        : 'Color de fondo';
+
+    const recentHtml = recentColors.length
+
+        ? `
+
+            <h3>Colores recientes</h3>
+
+            <div class="palette">${recentColors.map(color =>
+
+                `<button class="swatch" data-color="${color}"
+
+                    title="${color}" aria-label="${color}"
+
+                    style="background-color:${color}"></button>`
+
+            ).join('')}</div>
+
+        `
+
+        : '';
+
+    const presetHtml = PRESET_COLORS.map(color =>
+
+        `<button class="swatch" data-color="${color}"
+
+            title="${color}" aria-label="${color}"
+
+            style="background-color:${color}"></button>`
+
+    ).join('');
+
+    return /* html */ `
+
+<!DOCTYPE html>
+
+<html lang="es">
+
+<head>
+
+<meta charset="UTF-8">
+
+<meta
+
+    http-equiv="Content-Security-Policy"
+
+    content="default-src 'none'; style-src 'unsafe-inline';
+
+             script-src 'nonce-${nonce}';"
+
+\>
+
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+<style>
+
+    body {
+
+        padding: 18px;
+
+        color: var(--vscode-foreground);
+
+        background: var(--vscode-editor-background);
+
+        font-family: var(--vscode-font-family);
+
+    }
+
+    h2 { font-size: 18px; margin-top: 0; }
+
+    h3 {
+
+        font-size: 12px;
+
+        font-weight: normal;
+
+        margin: 22px 0 10px;
+
+        color: var(--vscode-descriptionForeground);
+
+    }
+
+    .palette {
+
+        display: grid;
+
+        grid-template-columns: repeat(5, 34px);
+
+        gap: 8px;
+
+    }
+
+    .swatch {
+
+        width: 34px;
+
+        height: 34px;
+
+        border-radius: 4px;
+
+        border: 1px solid var(--vscode-panel-border);
+
+        cursor: pointer;
+
+        padding: 0;
+
+    }
+
+    .swatch:hover, .swatch:focus {
+
+        outline: 2px solid var(--vscode-focusBorder);
+
+        outline-offset: 2px;
+
+    }
+
+    .custom {
+
+        display: flex;
+
+        align-items: center;
+
+        gap: 12px;
+
+        margin-top: 22px;
+
+    }
+
+    input[type="color"] {
+
+        width: 44px;
+
+        height: 38px;
+
+        padding: 2px;
+
+        cursor: pointer;
+
+        background: var(--vscode-input-background);
+
+        border: 1px solid var(--vscode-panel-border);
+
+    }
+
+    button.action {
+
+        margin-top: 12px;
+
+        padding: 7px 12px;
+
+        color: var(--vscode-button-foreground);
+
+        background: var(--vscode-button-background);
+
+        border: none;
+
+        cursor: pointer;
+
+    }
+
+    button.action:hover {
+
+        background: var(--vscode-button-hoverBackground);
+
+    }
+
+    .hint {
+
+        color: var(--vscode-descriptionForeground);
+
+        font-size: 12px;
+
+    }
+
+</style>
+
+</head>
+
+<body>
+
+    <h2>${title}</h2>
+
+    ${recentHtml}
+
+    <h3>Colores predefinidos</h3>
+
+    <div class="palette">${presetHtml}</div>
+
+    <h3>Color personalizado</h3>
+
+    <div class="custom">
+
+        <input id="customColor" type="color" value="#FF9900">
+
+        <span id="colorValue">#FF9900</span>
+
+    </div>
+
+    <button class="action" id="applyCustom">
+
+        Aplicar color personalizado
+
+    </button>
+
+    <p class="hint">
+
+        Selecciona un color para aplicarlo al texto marcado en la celda.
+
+    </p>
+
+<script nonce="${nonce}">
+
+    const vscode = acquireVsCodeApi();
+
+    const picker = document.getElementById('customColor');
+
+    const colorValue = document.getElementById('colorValue');
+
+    picker.addEventListener('input', () => {
+
+        colorValue.textContent = picker.value.toUpperCase();
+
+    });
+
+    document.querySelectorAll('.swatch').forEach(button => {
+
+        button.addEventListener('click', () => {
+
+            vscode.postMessage({
+
+                type: 'applyColor',
+
+                color: button.dataset.color
+
+            });
+
+        });
+
+    });
+
+    document.getElementById('applyCustom').addEventListener('click', () => {
+
+        vscode.postMessage({
+
+            type: 'applyColor',
+
+            color: picker.value
+
+        });
+
+    });
+
+</script>
+
+</body>
+
+</html>`;
+
+}
+
+function getNonce(): string {
+
+    const chars =
+
+        'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+
+    let value = '';
+
+    for (let i = 0; i < 32; i++) {
+
+        value += chars.charAt(Math.floor(Math.random() * chars.length));
+
+    }
+
+    return value;
+
+}
+
+async function openColorPalette(
+
+    context: vscode.ExtensionContext,
+
+    mode: PaletteMode
+
+): Promise<void> {
+
+    const target = await getMarkdownTarget();
+
+    if (!target) {
+
+        return;
+
+    }
+
+    const panel = vscode.window.createWebviewPanel(
+
+        'markdownVisualFormatter.palette',
+
+        mode === 'text' ? 'Color de texto' : 'Color de fondo',
+
+        vscode.ViewColumn.Beside,
+
+        {
+
+            enableScripts: true,
+
+            retainContextWhenHidden: true
+
+        }
+
+    );
+
+    const recentColors = getRecentColors(target.notebook, mode);
+
+    panel.webview.html = createPaletteHtml(
+
+        panel.webview,
+
+        mode,
+
+        recentColors
+
+    );
+
+    panel.webview.onDidReceiveMessage(
+
+        async message => {
+
+            if (
+
+                message.type !== 'applyColor' ||
+
+                typeof message.color !== 'string' ||
+
+                !isValidColor(message.color)
+
+            ) {
+
+                return;
+
+            }
+
+            await applyColor(target, mode, message.color);
+
+            panel.dispose();
+
+        },
+
+        undefined,
+
+        context.subscriptions
+
+    );
+
+    context.subscriptions.push(panel);
+
+}
+
+export function activate(context: vscode.ExtensionContext): void {
+
+    const highlightCommand = vscode.commands.registerCommand(
+
+        'markdown-visual-formatter.highlightText',
+
+        async () => {
+
+            const target = await getMarkdownTarget();
+
+            if (!target) {
+
+                return;
+
+            }
+
+            const replacement =
+
+                `<mark>${escapeHtml(target.selectedText)}</mark>`;
+
+            const success = await target.editor.edit(editBuilder => {
+
+                editBuilder.replace(target.selection, replacement);
+
+            });
+
+            if (success) {
+
+                vscode.window.setStatusBarMessage(
+
+                    'Resaltado aplicado.',
+
+                    3000
+
+                );
+
+            }
+
+        }
+
+    );
+
+    const textColorCommand = vscode.commands.registerCommand(
+
+        'markdown-visual-formatter.setTextColor',
+
+        async () => {
+
+            await openColorPalette(context, 'text');
+
+        }
+
+    );
+
+    const backgroundColorCommand = vscode.commands.registerCommand(
+
+        'markdown-visual-formatter.setBackgroundColor',
+
+        async () => {
+
+            await openColorPalette(context, 'background');
+
+        }
+
+    );
+
+    context.subscriptions.push(
+
+        highlightCommand,
+
+        textColorCommand,
+
+        backgroundColorCommand
+
+    );
+
+}
+
+export function deactivate(): void {}
